@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(135deg, #07080b 0%, #101014 44%, #15100c 100%);
+  background-size: 44px 44px, 44px 44px, auto;
+  background-attachment: fixed;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+video {
+  background: #000;
+}
+
+.game-player:fullscreen {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 100vw;
+  height: 100vh;
+  padding: 18px;
+  border: 0;
+  border-radius: 0;
+  background: #000;
+}
+
+.game-player:fullscreen .game-player-video {
+  flex: 1;
+  min-height: 0;
+  border-radius: 0.5rem;
+}
+
+.game-player:fullscreen video {
+  height: 100%;
+  object-fit: contain;
+}
+
+::selection {
+  color: #061018;
+  background: #67e8f9;
+}
