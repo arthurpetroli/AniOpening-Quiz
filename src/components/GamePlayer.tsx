@@ -40,6 +40,7 @@ export default function GamePlayer({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const progressRef = useRef<HTMLDivElement | null>(null);
   const delayedErrorRef = useRef<number | null>(null);
+  const autoSwapRef = useRef<number | null>(null);
   const reachedLimitRef = useRef(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -66,17 +67,32 @@ export default function GamePlayer({
     }
   }
 
+  function clearAutoSwap() {
+    if (autoSwapRef.current) {
+      window.clearTimeout(autoSwapRef.current);
+      autoSwapRef.current = null;
+    }
+  }
+
   function clearVideoError() {
     clearDelayedError();
+    clearAutoSwap();
     onVideoError(null);
   }
 
-  function reportVideoError(message: string) {
+  function reportVideoError(message: string, shouldAutoSwap = true) {
     clearDelayedError();
+    clearAutoSwap();
     delayedErrorRef.current = window.setTimeout(() => {
       setIsBuffering(false);
       onVideoError(message);
     }, 1600);
+
+    if (shouldAutoSwap && !isResolved) {
+      autoSwapRef.current = window.setTimeout(() => {
+        onTryAnotherVideo();
+      }, 4200);
+    }
   }
 
   function isBenignPlaybackAbort(error: unknown) {
@@ -126,7 +142,10 @@ export default function GamePlayer({
     setIsBuffering(false);
     clearVideoError();
 
-    return clearDelayedError;
+    return () => {
+      clearDelayedError();
+      clearAutoSwap();
+    };
   }, [videoUrl]);
 
   useEffect(() => {
@@ -315,7 +334,7 @@ export default function GamePlayer({
             clearVideoError();
           }}
           onWaiting={() => setIsBuffering(true)}
-          onStalled={() => reportVideoError("O carregamento do video demorou demais. Tente recarregar este video ou sortear outro.")}
+          onStalled={() => reportVideoError("O carregamento do video demorou demais. Vou tentar outro video se ele nao responder.")}
           onTimeUpdate={handleTimeUpdate}
           onPlaying={() => {
             setIsPlaying(true);
@@ -336,7 +355,8 @@ export default function GamePlayer({
         <div className="mt-3 rounded-lg border border-amber-300/25 bg-amber-300/10 p-4">
           <p className="text-sm font-medium text-amber-100">{videoErrorMessage}</p>
           <p className="mt-1 text-sm text-zinc-300">
-            Isso costuma acontecer quando o servidor de videos da AnimeThemes fica indisponivel por alguns instantes.
+            Isso costuma acontecer quando o servidor de videos da AnimeThemes fica indisponivel ou bloqueia um arquivo.
+            Se nao voltar rapido, vou sortear outro automaticamente.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <button

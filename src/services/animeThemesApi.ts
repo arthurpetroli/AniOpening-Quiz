@@ -10,7 +10,7 @@ import type {
 import type { Challenge, ThemeType } from "../types/game";
 import { getCache, setCache } from "../utils/localCache";
 import { normalizeText } from "../utils/normalizeText";
-import { randomInt, uniqueBy } from "../utils/random";
+import { randomInt, shuffle, uniqueBy } from "../utils/random";
 import {
   enrichChallengePoolWithPopularity,
   getPoolForMode,
@@ -22,9 +22,13 @@ const VIDEO_BASE_URL = "https://v.animethemes.moe";
 const INCLUDE = "synonyms,resources,animethemes.animethemeentries.videos,animethemes.song.artists";
 const CACHE_TTL_MS = 1000 * 60 * 60 * 4;
 const SEARCH_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
+const FAILED_VIDEO_TTL_MS = 1000 * 60 * 60 * 24;
+const PLAYED_ANIME_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const PAGE_SIZE = 50;
 const POOL_TARGET_SIZE = 12;
 const POOL_MIN_SIZE = 4;
+const MAX_RANDOM_PAGES_PER_POOL = 8;
+const CHALLENGES_PER_RANDOM_PAGE = 2;
 const FALLBACK_LAST_PAGE = 180;
 
 const allPoolCache: Partial<Record<ThemeType, Challenge[]>> = {};
@@ -32,17 +36,88 @@ const modePoolCache: Partial<Record<string, Challenge[]>> = {};
 const allPoolInFlight: Partial<Record<ThemeType, Promise<Challenge[]>>> = {};
 const modePoolInFlight: Partial<Record<string, Promise<Challenge[]>>> = {};
 const searchCache = new Map<string, string[]>();
+const failedVideoUrls = new Set<string>();
 
 function cacheKey(themeType: ThemeType) {
-  return `ani-opening-quiz:pool-v4:${themeType}`;
+  return `ani-opening-quiz:pool-v5:${themeType}`;
 }
 
 function modePoolKey(themeType: ThemeType, hard: boolean) {
   return `${themeType}:${hard ? "hard" : "normal"}`;
 }
 
+function playedAnimeCacheKey(key: string) {
+  return `ani-opening-quiz:played-anime-v1:${key}`;
+}
+
+function getPlayedAnimeIds(key: string) {
+  return new Set(getCache<number[]>(playedAnimeCacheKey(key)) ?? []);
+}
+
+function setPlayedAnimeIds(key: string, animeIds: Set<number>) {
+  setCache(playedAnimeCacheKey(key), Array.from(animeIds), PLAYED_ANIME_TTL_MS);
+}
+
+function markAnimeAsPlayed(key: string, animeId: number) {
+  const playedAnimeIds = getPlayedAnimeIds(key);
+  playedAnimeIds.add(animeId);
+  setPlayedAnimeIds(key, playedAnimeIds);
+}
+
+function clearPlayedAnimeHistory(key: string) {
+  setPlayedAnimeIds(key, new Set());
+}
+
+function withoutPlayedAnime(challenges: Challenge[], key: string) {
+  const playedAnimeIds = getPlayedAnimeIds(key);
+  return challenges.filter((challenge) => !playedAnimeIds.has(challenge.animeId));
+}
+
 function metaCacheKey() {
   return "ani-opening-quiz:anime-meta";
+}
+
+function failedVideoCacheKey() {
+  return "ani-opening-quiz:failed-videos-v1";
+}
+
+function getFailedVideoUrls() {
+  const cachedUrls = getCache<string[]>(failedVideoCacheKey()) ?? [];
+
+  for (const url of cachedUrls) {
+    failedVideoUrls.add(url);
+  }
+
+  return failedVideoUrls;
+}
+
+function isUnavailableVideoUrl(videoUrl: string) {
+  return getFailedVideoUrls().has(videoUrl);
+}
+
+function withoutUnavailableVideos(challenges: Challenge[]) {
+  const unavailableUrls = getFailedVideoUrls();
+  return challenges.filter((challenge) => !unavailableUrls.has(challenge.videoUrl));
+}
+
+export function markVideoAsUnavailable(challenge: Pick<Challenge, "themeType" | "videoUrl">) {
+  if (!challenge.videoUrl) {
+    return;
+  }
+
+  failedVideoUrls.add(challenge.videoUrl);
+  setCache(failedVideoCacheKey(), Array.from(failedVideoUrls), FAILED_VIDEO_TTL_MS);
+
+  allPoolCache[challenge.themeType] = withoutUnavailableVideos(allPoolCache[challenge.themeType] ?? []);
+
+  for (const [key, pool] of Object.entries(modePoolCache)) {
+    if (key.startsWith(`${challenge.themeType}:`)) {
+      modePoolCache[key] = withoutUnavailableVideos(pool ?? []);
+    }
+  }
+
+  const cachedPool = getCache<Challenge[]>(cacheKey(challenge.themeType)) ?? [];
+  setCache(cacheKey(challenge.themeType), withoutUnavailableVideos(cachedPool), CACHE_TTL_MS);
 }
 
 function getResponseAnime(response: AnimeThemesApiResponse) {
@@ -169,7 +244,7 @@ function getBestVideo(entries: AnimeThemesEntry[]) {
   for (const video of sortedVideos) {
     const videoUrl = getVideoUrl(video);
 
-    if (videoUrl) {
+    if (videoUrl && !isUnavailableVideoUrl(videoUrl)) {
       return {
         video,
         videoUrl,
@@ -262,6 +337,24 @@ export async function fetchRandomAnimePage() {
   return fetchAnimePage(page, PAGE_SIZE);
 }
 
+function pickRandomPageNumber(lastPage: number, usedPages: Set<number>) {
+  const safeLastPage = Math.max(1, lastPage);
+
+  if (usedPages.size >= safeLastPage) {
+    return randomInt(1, safeLastPage);
+  }
+
+  let page = randomInt(1, safeLastPage);
+
+  while (usedPages.has(page)) {
+    page = randomInt(1, safeLastPage);
+  }
+
+  usedPages.add(page);
+
+  return page;
+}
+
 export function mapAnimeToChallenges(animeList: AnimeThemesAnime[], themeType: ThemeType) {
   const challenges = animeList.flatMap((anime): Challenge[] => {
     const themes = anime.animethemes ?? anime.themes ?? [];
@@ -304,17 +397,23 @@ export function mapAnimeToChallenges(animeList: AnimeThemesAnime[], themeType: T
 }
 
 async function fetchChallengePool(themeType: ThemeType) {
-  const collected: Challenge[] = [];
+  let collected: Challenge[] = [];
+  const lastPage = await getLastAnimePage();
+  const usedPages = new Set<number>();
   let attempts = 0;
 
-  while (collected.length < POOL_TARGET_SIZE && attempts < 5) {
+  while (collected.length < POOL_TARGET_SIZE && attempts < MAX_RANDOM_PAGES_PER_POOL) {
     attempts += 1;
-    const page = await fetchRandomAnimePage();
-    const challenges = mapAnimeToChallenges(getResponseAnime(page), themeType);
-    collected.push(...challenges);
+    const pageNumber = pickRandomPageNumber(lastPage, usedPages);
+    const page = await fetchAnimePage(pageNumber, PAGE_SIZE);
+    const challenges = shuffle(mapAnimeToChallenges(getResponseAnime(page), themeType)).slice(
+      0,
+      CHALLENGES_PER_RANDOM_PAGE,
+    );
+    collected = uniqueBy([...collected, ...withoutUnavailableVideos(challenges)], (challenge) => challenge.videoUrl);
   }
 
-  return uniqueBy(collected, (challenge) => challenge.videoUrl);
+  return collected;
 }
 
 export async function getChallengePool(themeType: ThemeType) {
@@ -322,9 +421,10 @@ export async function getChallengePool(themeType: ThemeType) {
 }
 
 async function getAllChallengePool(themeType: ThemeType) {
-  const memoryPool = allPoolCache[themeType] ?? [];
+  const memoryPool = withoutUnavailableVideos(allPoolCache[themeType] ?? []);
 
   if (memoryPool.length >= POOL_MIN_SIZE) {
+    allPoolCache[themeType] = memoryPool;
     return memoryPool;
   }
 
@@ -332,7 +432,7 @@ async function getAllChallengePool(themeType: ThemeType) {
     return allPoolInFlight[themeType] ?? [];
   }
 
-  const cachedPool = getCache<Challenge[]>(cacheKey(themeType)) ?? [];
+  const cachedPool = withoutUnavailableVideos(getCache<Challenge[]>(cacheKey(themeType)) ?? []);
 
   if (cachedPool.length >= POOL_MIN_SIZE) {
     allPoolCache[themeType] = uniqueBy([...memoryPool, ...cachedPool], (challenge) => challenge.videoUrl);
@@ -364,7 +464,7 @@ async function getAllChallengePool(themeType: ThemeType) {
 }
 
 function selectChallengesForMode(challenges: Challenge[], hard: boolean) {
-  const pools = splitChallengesByDifficulty(challenges);
+  const pools = splitChallengesByDifficulty(withoutUnavailableVideos(challenges));
   const preferredPool = getPoolForMode(hard, pools);
 
   return uniqueBy(preferredPool, (challenge) => challenge.videoUrl);
@@ -372,9 +472,11 @@ function selectChallengesForMode(challenges: Challenge[], hard: boolean) {
 
 export async function getModeChallengePool(themeType: ThemeType, hard: boolean) {
   const key = modePoolKey(themeType, hard);
-  const existingModePool = modePoolCache[key] ?? [];
+  const rawExistingModePool = withoutUnavailableVideos(modePoolCache[key] ?? []);
+  const existingModePool = withoutPlayedAnime(rawExistingModePool, key);
 
   if (existingModePool.length >= POOL_MIN_SIZE) {
+    modePoolCache[key] = existingModePool;
     return existingModePool;
   }
 
@@ -384,7 +486,10 @@ export async function getModeChallengePool(themeType: ThemeType, hard: boolean) 
 
   const request = (async () => {
     let allPool = await getAllChallengePool(themeType);
-    let modePool = uniqueBy([...existingModePool, ...selectChallengesForMode(allPool, hard)], (challenge) => challenge.videoUrl);
+    let modePool = withoutPlayedAnime(
+      uniqueBy([...existingModePool, ...selectChallengesForMode(allPool, hard)], (challenge) => challenge.videoUrl),
+      key,
+    );
     let attempts = 0;
 
     while (modePool.length < POOL_MIN_SIZE && attempts < 2) {
@@ -394,7 +499,18 @@ export async function getModeChallengePool(themeType: ThemeType, hard: boolean) 
       allPool = uniqueBy([...allPool, ...enrichedFreshPool], (challenge) => challenge.videoUrl);
       allPoolCache[themeType] = allPool;
       setCache(cacheKey(themeType), allPool, CACHE_TTL_MS);
-      modePool = uniqueBy([...modePool, ...selectChallengesForMode(allPool, hard)], (challenge) => challenge.videoUrl);
+      modePool = withoutPlayedAnime(
+        uniqueBy([...modePool, ...selectChallengesForMode(allPool, hard)], (challenge) => challenge.videoUrl),
+        key,
+      );
+    }
+
+    if (modePool.length === 0 && getPlayedAnimeIds(key).size > 0) {
+      clearPlayedAnimeHistory(key);
+      modePool = uniqueBy(
+        [...rawExistingModePool, ...selectChallengesForMode(allPool, hard)],
+        (challenge) => challenge.videoUrl,
+      );
     }
 
     if (modePool.length === 0) {
@@ -417,15 +533,22 @@ export async function getModeChallengePool(themeType: ThemeType, hard: boolean) 
 
 export async function getRandomChallenge(themeType: ThemeType, hard = false) {
   const key = modePoolKey(themeType, hard);
-  const pool = await getModeChallengePool(themeType, hard);
+  let pool = withoutPlayedAnime(withoutUnavailableVideos(await getModeChallengePool(themeType, hard)), key);
+
+  if (pool.length === 0 && getPlayedAnimeIds(key).size > 0) {
+    clearPlayedAnimeHistory(key);
+    pool = withoutUnavailableVideos(await getModeChallengePool(themeType, hard));
+  }
+
   const index = randomInt(0, pool.length - 1);
   const [challenge] = pool.splice(index, 1);
-
-  modePoolCache[key] = pool;
 
   if (!challenge) {
     throw new Error("Não foi possível sortear um desafio.");
   }
+
+  modePoolCache[key] = pool.filter((item) => item.animeId !== challenge.animeId);
+  markAnimeAsPlayed(key, challenge.animeId);
 
   return challenge;
 }

@@ -1,9 +1,12 @@
+import type { Ref } from "react";
 import { ArrowRight, Play, Trophy } from "lucide-react";
 import type { Challenge, GameStatus } from "../types/game";
+import { normalizeText } from "../utils/normalizeText";
 
 type ResultModalProps = {
   status: GameStatus;
   challenge: Challenge;
+  actionsRef?: Ref<HTMLDivElement>;
   onWatchFull: () => void;
   onNext: () => void;
 };
@@ -22,13 +25,45 @@ function difficultyLabel(level: Challenge["difficultyLevel"]) {
   return "Mixed";
 }
 
-export default function ResultModal({ status, challenge, onWatchFull, onNext }: ResultModalProps) {
+function titleFromJikanType(challenge: Challenge, type: string) {
+  return challenge.popularityData?.titles?.find((title) => title.type.toLowerCase() === type)?.title;
+}
+
+function getEnglishTitle(challenge: Challenge) {
+  return challenge.popularityData?.titleEnglish ?? titleFromJikanType(challenge, "english");
+}
+
+function getJapaneseTitle(challenge: Challenge) {
+  return challenge.popularityData?.titleJapanese ?? titleFromJikanType(challenge, "japanese");
+}
+
+function getAlternativeTitles(challenge: Challenge, visibleTitles: string[]) {
+  const seen = new Set(visibleTitles.filter(Boolean).map((title) => normalizeText(title)));
+
+  return challenge.alternativeNames
+    .filter((title) => {
+      const normalizedTitle = normalizeText(title);
+
+      if (!normalizedTitle || seen.has(normalizedTitle)) {
+        return false;
+      }
+
+      seen.add(normalizedTitle);
+      return true;
+    })
+    .slice(0, 4);
+}
+
+export default function ResultModal({ status, challenge, actionsRef, onWatchFull, onNext }: ResultModalProps) {
   if (status !== "won" && status !== "lost") {
     return null;
   }
 
   const won = status === "won";
   const artists = challenge.artists.length > 0 ? challenge.artists.join(", ") : "Artista não informado";
+  const englishTitle = getEnglishTitle(challenge);
+  const japaneseTitle = getJapaneseTitle(challenge);
+  const alternativeTitles = getAlternativeTitles(challenge, [challenge.animeName, englishTitle ?? "", japaneseTitle ?? ""]);
 
   return (
     <section
@@ -54,6 +89,20 @@ export default function ResultModal({ status, challenge, onWatchFull, onNext }: 
       <div className="mt-5 rounded-lg border border-white/10 bg-black/25 p-4">
         <h3 className="text-2xl font-bold text-white">{challenge.animeName}</h3>
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-zinc-400">Título em inglês</dt>
+            <dd className="mt-1 font-semibold text-white">{englishTitle ?? "Não informado"}</dd>
+          </div>
+          <div>
+            <dt className="text-zinc-400">Título japonês</dt>
+            <dd className="mt-1 font-semibold text-white">{japaneseTitle ?? "Não informado"}</dd>
+          </div>
+          {alternativeTitles.length > 0 ? (
+            <div className="sm:col-span-2">
+              <dt className="text-zinc-400">Também conhecido como</dt>
+              <dd className="mt-1 font-semibold text-white">{alternativeTitles.join(", ")}</dd>
+            </div>
+          ) : null}
           <div>
             <dt className="text-zinc-400">Tipo</dt>
             <dd className="mt-1 font-semibold text-white">{themeLabel(challenge)}</dd>
@@ -99,7 +148,7 @@ export default function ResultModal({ status, challenge, onWatchFull, onNext }: 
         </div>
       ) : null}
 
-      <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+      <div ref={actionsRef} className="mt-5 flex flex-col gap-3 sm:flex-row">
         <button
           type="button"
           onClick={onWatchFull}

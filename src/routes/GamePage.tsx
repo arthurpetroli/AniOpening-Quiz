@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import AttemptList from "../components/AttemptList";
 import ErrorState from "../components/ErrorState";
 import GameHeader from "../components/GameHeader";
@@ -10,7 +10,7 @@ import ResultModal from "../components/ResultModal";
 import { gameModes } from "../config/gameModes";
 import { useChallengePool } from "../hooks/useChallengePool";
 import { useGame } from "../hooks/useGame";
-import { searchAnimeNames } from "../services/animeThemesApi";
+import { markVideoAsUnavailable, searchAnimeNames } from "../services/animeThemesApi";
 import type { GameModeId } from "../types/game";
 
 type GamePageProps = {
@@ -22,6 +22,7 @@ export default function GamePage({ modeId }: GamePageProps) {
   const [fullReplaySignal, setFullReplaySignal] = useState(0);
   const [videoErrorMessage, setVideoErrorMessage] = useState<string | null>(null);
   const [remoteSuggestions, setRemoteSuggestions] = useState<string[]>([]);
+  const resultActionsRef = useRef<HTMLDivElement>(null);
   const { knownNames } = useChallengePool();
 
   const challenge = useGame((state) => state.challenge);
@@ -38,6 +39,7 @@ export default function GamePage({ modeId }: GamePageProps) {
   const submitGuess = useGame((state) => state.submitGuess);
   const skip = useGame((state) => state.skip);
   const setCurrentGuess = useGame((state) => state.setCurrentGuess);
+  const resolved = status === "won" || status === "lost";
 
   useEffect(() => {
     void startGame(mode);
@@ -87,6 +89,29 @@ export default function GamePage({ modeId }: GamePageProps) {
     [knownNames, remoteSuggestions],
   );
 
+  function handleTryAnotherVideo() {
+    if (challenge) {
+      markVideoAsUnavailable(challenge);
+    }
+
+    void discardCurrentChallenge();
+  }
+
+  useEffect(() => {
+    if (!resolved) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      resultActionsRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }, 150);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [resolved, challenge?.videoUrl]);
+
   if (status === "error") {
     return <ErrorState message={errorMessage} onRetry={() => void startGame(mode)} />;
   }
@@ -94,8 +119,6 @@ export default function GamePage({ modeId }: GamePageProps) {
   if (status === "loading" || !challenge) {
     return <LoadingState message={errorMessage} />;
   }
-
-  const resolved = status === "won" || status === "lost";
 
   return (
     <div className="space-y-5">
@@ -111,7 +134,7 @@ export default function GamePage({ modeId }: GamePageProps) {
             fullReplaySignal={fullReplaySignal}
             videoErrorMessage={videoErrorMessage}
             onVideoError={setVideoErrorMessage}
-            onTryAnotherVideo={() => void discardCurrentChallenge()}
+            onTryAnotherVideo={handleTryAnotherVideo}
           />
 
           <GuessInput
@@ -129,6 +152,7 @@ export default function GamePage({ modeId }: GamePageProps) {
           <ResultModal
             status={status}
             challenge={challenge}
+            actionsRef={resultActionsRef}
             onWatchFull={() => setFullReplaySignal((value) => value + 1)}
             onNext={() => void loadNextChallenge()}
           />
