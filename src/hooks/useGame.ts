@@ -28,22 +28,6 @@ function createAttempt(type: Attempt["type"], value: string): Attempt {
   };
 }
 
-async function drawPair(mode: GameMode, preferredCurrent?: Challenge | null) {
-  const current = preferredCurrent ?? (await getRandomChallenge(mode.themeType, mode.hard));
-  let next: Challenge | null = null;
-
-  try {
-    next = await getRandomChallenge(mode.themeType, mode.hard);
-  } catch {
-    next = null;
-  }
-
-  return {
-    current,
-    next,
-  };
-}
-
 function resultStateForChallenge(mode: GameMode, challenge: Challenge, nextChallenge: Challenge | null): Partial<GameState> {
   return {
     mode,
@@ -59,164 +43,222 @@ function resultStateForChallenge(mode: GameMode, challenge: Challenge, nextChall
   };
 }
 
-export const useGame = create<GameState & GameActions>((set, get) => ({
-  mode: null,
-  challenge: null,
-  nextChallenge: null,
-  status: "loading",
-  lives: 0,
-  stepIndex: 0,
-  attempts: [],
-  currentGuess: "",
-  inputError: null,
-  errorMessage: null,
+export const useGame = create<GameState & GameActions>((set, get) => {
+  let preloadRequestId = 0;
 
-  startGame: async (mode) => {
-    set({
-      mode,
-      status: "loading",
-      lives: mode.lives,
-      stepIndex: 0,
-      attempts: [],
-      currentGuess: "",
-      inputError: null,
-      errorMessage: null,
-      challenge: null,
-      nextChallenge: null,
-    });
+  function isSameMode(left: GameMode | null, right: GameMode) {
+    return left?.id === right.id;
+  }
 
-    try {
-      const { current, next } = await drawPair(mode);
-      set(resultStateForChallenge(mode, current, next));
-    } catch (error) {
+  function preloadNextChallenge(mode: GameMode, currentChallenge: Challenge) {
+    const requestId = ++preloadRequestId;
+
+    void (async () => {
+      try {
+        const next = await getRandomChallenge(mode.themeType, mode.hard);
+        const state = get();
+
+        if (
+          requestId !== preloadRequestId ||
+          !isSameMode(state.mode, mode) ||
+          state.challenge?.videoUrl !== currentChallenge.videoUrl
+        ) {
+          return;
+        }
+
+        set({ nextChallenge: next });
+      } catch {
+        const state = get();
+
+        if (
+          requestId === preloadRequestId &&
+          isSameMode(state.mode, mode) &&
+          state.challenge?.videoUrl === currentChallenge.videoUrl
+        ) {
+          set({ nextChallenge: null });
+        }
+      }
+    })();
+  }
+
+  function activateChallenge(mode: GameMode, challenge: Challenge) {
+    set(resultStateForChallenge(mode, challenge, null));
+    preloadNextChallenge(mode, challenge);
+  }
+
+  return {
+    mode: null,
+    challenge: null,
+    nextChallenge: null,
+    status: "loading",
+    lives: 0,
+    stepIndex: 0,
+    attempts: [],
+    currentGuess: "",
+    inputError: null,
+    errorMessage: null,
+
+    startGame: async (mode) => {
+      preloadRequestId += 1;
+
       set({
-        status: "error",
-        errorMessage: error instanceof Error ? error.message : "Falha ao carregar o desafio.",
+        mode,
+        status: "loading",
+        lives: mode.lives,
+        stepIndex: 0,
+        attempts: [],
+        currentGuess: "",
+        inputError: null,
+        errorMessage: null,
+        challenge: null,
+        nextChallenge: null,
       });
-    }
-  },
 
-  loadNextChallenge: async () => {
-    const { mode, nextChallenge } = get();
+      try {
+        const current = await getRandomChallenge(mode.themeType, mode.hard);
+        activateChallenge(mode, current);
+      } catch (error) {
+        set({
+          status: "error",
+          errorMessage: error instanceof Error ? error.message : "Falha ao carregar o desafio.",
+        });
+      }
+    },
 
-    if (!mode) {
-      return;
-    }
+    loadNextChallenge: async () => {
+      const { mode, nextChallenge } = get();
 
-    set({
-      status: "loading",
-      inputError: null,
-      errorMessage: null,
-    });
+      if (!mode) {
+        return;
+      }
 
-    try {
-      const { current, next } = await drawPair(mode, nextChallenge);
-      set(resultStateForChallenge(mode, current, next));
-    } catch (error) {
+      if (nextChallenge) {
+        activateChallenge(mode, nextChallenge);
+        return;
+      }
+
+      preloadRequestId += 1;
       set({
-        status: "error",
-        errorMessage: error instanceof Error ? error.message : "Falha ao carregar o próximo desafio.",
+        status: "loading",
+        inputError: null,
+        errorMessage: null,
       });
-    }
-  },
 
-  discardCurrentChallenge: async () => {
-    const { mode } = get();
+      try {
+        const current = await getRandomChallenge(mode.themeType, mode.hard);
+        activateChallenge(mode, current);
+      } catch (error) {
+        set({
+          status: "error",
+          errorMessage: error instanceof Error ? error.message : "Falha ao carregar o próximo desafio.",
+        });
+      }
+    },
 
-    if (!mode) {
-      return;
-    }
+    discardCurrentChallenge: async () => {
+      const { mode, nextChallenge } = get();
 
-    set({
-      status: "loading",
-      inputError: null,
-      errorMessage: "Esse vídeo não carregou. Sorteando outro...",
-    });
+      if (!mode) {
+        return;
+      }
 
-    try {
-      const { current, next } = await drawPair(mode);
-      set(resultStateForChallenge(mode, current, next));
-    } catch (error) {
+      if (nextChallenge) {
+        activateChallenge(mode, nextChallenge);
+        return;
+      }
+
+      preloadRequestId += 1;
       set({
-        status: "error",
-        errorMessage: error instanceof Error ? error.message : "Não consegui trocar o vídeo.",
+        status: "loading",
+        inputError: null,
+        errorMessage: "Esse vídeo não carregou. Sorteando outro...",
       });
-    }
-  },
 
-  submitGuess: (guess) => {
-    const state = get();
+      try {
+        const current = await getRandomChallenge(mode.themeType, mode.hard);
+        activateChallenge(mode, current);
+      } catch (error) {
+        set({
+          status: "error",
+          errorMessage: error instanceof Error ? error.message : "Não consegui trocar o vídeo.",
+        });
+      }
+    },
 
-    if (state.status !== "playing" || !state.challenge || !state.mode) {
-      return;
-    }
+    submitGuess: (guess) => {
+      const state = get();
 
-    const value = (guess ?? state.currentGuess).trim();
+      if (state.status !== "playing" || !state.challenge || !state.mode) {
+        return;
+      }
 
-    if (!value) {
-      set({ inputError: "Digite um palpite antes de enviar." });
-      return;
-    }
+      const value = (guess ?? state.currentGuess).trim();
 
-    if (hasRepeatedGuess(value, state.attempts.filter((attempt) => attempt.type === "guess").map((attempt) => attempt.value))) {
-      set({ inputError: "Você já tentou esse nome." });
-      return;
-    }
+      if (!value) {
+        set({ inputError: "Digite um palpite antes de enviar." });
+        return;
+      }
 
-    if (isCorrectGuess(value, state.challenge, state.mode.hard)) {
+      if (hasRepeatedGuess(value, state.attempts.filter((attempt) => attempt.type === "guess").map((attempt) => attempt.value))) {
+        set({ inputError: "Você já tentou esse nome." });
+        return;
+      }
+
+      if (isCorrectGuess(value, state.challenge, state.mode.hard)) {
+        set({
+          status: "won",
+          stepIndex: state.mode.revealSteps.length - 1,
+          currentGuess: "",
+          inputError: null,
+        });
+        return;
+      }
+
+      const nextLives = state.lives - 1;
+      const attempt = createAttempt("guess", value);
+
       set({
-        status: "won",
-        stepIndex: state.mode.revealSteps.length - 1,
+        attempts: [...state.attempts, attempt],
+        lives: Math.max(0, nextLives),
+        stepIndex: Math.min(state.stepIndex + 1, state.mode.revealSteps.length - 1),
+        status: nextLives <= 0 ? "lost" : "playing",
         currentGuess: "",
         inputError: null,
       });
-      return;
-    }
+    },
 
-    const nextLives = state.lives - 1;
-    const attempt = createAttempt("guess", value);
+    skip: () => {
+      const state = get();
 
-    set({
-      attempts: [...state.attempts, attempt],
-      lives: Math.max(0, nextLives),
-      stepIndex: Math.min(state.stepIndex + 1, state.mode.revealSteps.length - 1),
-      status: nextLives <= 0 ? "lost" : "playing",
-      currentGuess: "",
-      inputError: null,
-    });
-  },
+      if (state.status !== "playing" || !state.mode) {
+        return;
+      }
 
-  skip: () => {
-    const state = get();
+      const nextLives = state.lives - 1;
+      const attempt = createAttempt("skip", "Skip");
 
-    if (state.status !== "playing" || !state.mode) {
-      return;
-    }
+      set({
+        attempts: [...state.attempts, attempt],
+        lives: Math.max(0, nextLives),
+        stepIndex: Math.min(state.stepIndex + 1, state.mode.revealSteps.length - 1),
+        status: nextLives <= 0 ? "lost" : "playing",
+        currentGuess: "",
+        inputError: null,
+      });
+    },
 
-    const nextLives = state.lives - 1;
-    const attempt = createAttempt("skip", "Skip");
+    setCurrentGuess: (guess) => {
+      set({
+        currentGuess: guess,
+        inputError: null,
+      });
+    },
 
-    set({
-      attempts: [...state.attempts, attempt],
-      lives: Math.max(0, nextLives),
-      stepIndex: Math.min(state.stepIndex + 1, state.mode.revealSteps.length - 1),
-      status: nextLives <= 0 ? "lost" : "playing",
-      currentGuess: "",
-      inputError: null,
-    });
-  },
-
-  setCurrentGuess: (guess) => {
-    set({
-      currentGuess: guess,
-      inputError: null,
-    });
-  },
-
-  clearInputError: () => {
-    set({ inputError: null });
-  },
-}));
+    clearInputError: () => {
+      set({ inputError: null });
+    },
+  };
+});
 
 export function getKnownNamesForCurrentGame() {
   const { mode, challenge, nextChallenge } = useGame.getState();
