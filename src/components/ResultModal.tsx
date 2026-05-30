@@ -12,6 +12,16 @@ function themeLabel(challenge: Challenge) {
   return `${challenge.themeType}${challenge.sequence}`;
 }
 
+function formatNumber(value: number | undefined) {
+  return typeof value === "number" ? value.toLocaleString("pt-BR") : "-";
+}
+
+function difficultyLabel(level: Challenge["difficultyLevel"]) {
+  if (level === "normal") return "Normal";
+  if (level === "hard") return "Hard";
+  return "Mixed";
+}
+
 export default function ResultModal({ status, challenge, onWatchFull, onNext }: ResultModalProps) {
   if (status !== "won" && status !== "lost") {
     return null;
@@ -58,6 +68,36 @@ export default function ResultModal({ status, challenge, onWatchFull, onNext }: 
           </div>
         </dl>
       </div>
+
+      {challenge.popularityData ? (
+        <div className="mt-4 rounded-lg border border-white/10 bg-black/25 p-4">
+          <h3 className="text-sm font-semibold uppercase text-zinc-300">MyAnimeList</h3>
+          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-zinc-400">Score</dt>
+              <dd className="mt-1 font-semibold text-white">{challenge.popularityData.score ?? "-"}</dd>
+            </div>
+            <div>
+              <dt className="text-zinc-400">Members</dt>
+              <dd className="mt-1 font-semibold text-white">{formatNumber(challenge.popularityData.members)}</dd>
+            </div>
+            <div>
+              <dt className="text-zinc-400">Popularity</dt>
+              <dd className="mt-1 font-semibold text-white">
+                {challenge.popularityData.popularity ? `#${challenge.popularityData.popularity}` : "-"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-zinc-400">Favorites</dt>
+              <dd className="mt-1 font-semibold text-white">{formatNumber(challenge.popularityData.favorites)}</dd>
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-zinc-400">Dificuldade</dt>
+              <dd className="mt-1 font-semibold text-white">{difficultyLabel(challenge.difficultyLevel)}</dd>
+            </div>
+          </dl>
+        </div>
+      ) : null}
 
       <div className="mt-5 flex flex-col gap-3 sm:flex-row">
         <button

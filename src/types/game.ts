@@ -1,3 +1,5 @@
+import type { DifficultyLevel, PopularityData } from "./popularity";
+
 export type ThemeType = "OP" | "ED";
 
 export type GameModeId = "opening" | "ending" | "hardOpening" | "hardEnding";
@@ -34,6 +36,9 @@ export type Challenge = {
   videoFilename: string;
   year?: number;
   season?: string;
+  malId?: number;
+  popularityData?: PopularityData;
+  difficultyLevel?: DifficultyLevel;
 };
 
 export type Attempt = {

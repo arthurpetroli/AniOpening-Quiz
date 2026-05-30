@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { getChallengeNames, getChallengePool } from "../services/animeThemesApi";
+import { getChallengeNames, getModeChallengePool } from "../services/animeThemesApi";
 import type { Challenge } from "../types/game";
 import { useGame } from "./useGame";
 
@@ -24,7 +24,7 @@ export function useChallengePool() {
 
     setKnownNames(getChallengeNames(mode.themeType, extraChallenges));
 
-    getChallengePool(mode.themeType)
+    getModeChallengePool(mode.themeType, mode.hard)
       .then(() => {
         if (active) {
           setKnownNames(getChallengeNames(mode.themeType, extraChallenges));

@@ -11,22 +11,34 @@ import type { Challenge, ThemeType } from "../types/game";
 import { getCache, setCache } from "../utils/localCache";
 import { normalizeText } from "../utils/normalizeText";
 import { randomInt, uniqueBy } from "../utils/random";
+import {
+  enrichChallengePoolWithPopularity,
+  getPoolForMode,
+  splitChallengesByDifficulty,
+} from "./popularityService";
 
 const API_BASE_URL = "https://api.animethemes.moe";
 const VIDEO_BASE_URL = "https://v.animethemes.moe";
-const INCLUDE = "synonyms,animethemes.animethemeentries.videos,animethemes.song.artists";
+const INCLUDE = "synonyms,resources,animethemes.animethemeentries.videos,animethemes.song.artists";
 const CACHE_TTL_MS = 1000 * 60 * 60 * 4;
 const SEARCH_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 const PAGE_SIZE = 50;
-const POOL_TARGET_SIZE = 40;
-const POOL_MIN_SIZE = 12;
+const POOL_TARGET_SIZE = 12;
+const POOL_MIN_SIZE = 4;
 const FALLBACK_LAST_PAGE = 180;
 
-const poolCache: Partial<Record<ThemeType, Challenge[]>> = {};
+const allPoolCache: Partial<Record<ThemeType, Challenge[]>> = {};
+const modePoolCache: Partial<Record<string, Challenge[]>> = {};
+const allPoolInFlight: Partial<Record<ThemeType, Promise<Challenge[]>>> = {};
+const modePoolInFlight: Partial<Record<string, Promise<Challenge[]>>> = {};
 const searchCache = new Map<string, string[]>();
 
 function cacheKey(themeType: ThemeType) {
-  return `ani-opening-quiz:pool:${themeType}`;
+  return `ani-opening-quiz:pool-v4:${themeType}`;
+}
+
+function modePoolKey(themeType: ThemeType, hard: boolean) {
+  return `${themeType}:${hard ? "hard" : "normal"}`;
 }
 
 function metaCacheKey() {
@@ -197,6 +209,13 @@ function getAlternativeNames(anime: AnimeThemesAnime) {
   );
 }
 
+function getMalId(anime: AnimeThemesAnime) {
+  const resource = anime.resources?.find((item) => item.site?.toLowerCase() === "myanimelist");
+  const id = Number(resource?.external_id);
+
+  return Number.isFinite(id) && id > 0 ? id : undefined;
+}
+
 function getAnimeNames(animeList: AnimeThemesAnime[]) {
   return uniqueBy(
     animeList
@@ -275,6 +294,7 @@ export function mapAnimeToChallenges(animeList: AnimeThemesAnime[], themeType: T
           videoFilename: getVideoFilename(bestVideo.video, bestVideo.videoUrl),
           year: anime.year,
           season: anime.season,
+          malId: getMalId(anime),
         },
       ];
     });
@@ -298,38 +318,110 @@ async function fetchChallengePool(themeType: ThemeType) {
 }
 
 export async function getChallengePool(themeType: ThemeType) {
-  const memoryPool = poolCache[themeType] ?? [];
+  return getModeChallengePool(themeType, false);
+}
+
+async function getAllChallengePool(themeType: ThemeType) {
+  const memoryPool = allPoolCache[themeType] ?? [];
 
   if (memoryPool.length >= POOL_MIN_SIZE) {
     return memoryPool;
   }
 
+  if (allPoolInFlight[themeType]) {
+    return allPoolInFlight[themeType] ?? [];
+  }
+
   const cachedPool = getCache<Challenge[]>(cacheKey(themeType)) ?? [];
 
   if (cachedPool.length >= POOL_MIN_SIZE) {
-    poolCache[themeType] = uniqueBy([...memoryPool, ...cachedPool], (challenge) => challenge.videoUrl);
-    return poolCache[themeType] ?? [];
+    allPoolCache[themeType] = uniqueBy([...memoryPool, ...cachedPool], (challenge) => challenge.videoUrl);
+    return allPoolCache[themeType] ?? [];
   }
 
-  const freshPool = await fetchChallengePool(themeType);
-  const nextPool = uniqueBy([...memoryPool, ...cachedPool, ...freshPool], (challenge) => challenge.videoUrl);
+  const request = (async () => {
+    const freshPool = await fetchChallengePool(themeType);
+    const enrichedFreshPool = await enrichChallengePoolWithPopularity(freshPool);
+    const nextPool = uniqueBy([...memoryPool, ...cachedPool, ...enrichedFreshPool], (challenge) => challenge.videoUrl);
 
-  if (nextPool.length === 0) {
-    throw new Error("Não encontrei vídeos válidos para esse modo.");
+    if (nextPool.length === 0) {
+      throw new Error("Não encontrei vídeos válidos para esse modo.");
+    }
+
+    allPoolCache[themeType] = nextPool;
+    setCache(cacheKey(themeType), nextPool, CACHE_TTL_MS);
+
+    return nextPool;
+  })();
+
+  allPoolInFlight[themeType] = request;
+
+  try {
+    return await request;
+  } finally {
+    delete allPoolInFlight[themeType];
   }
-
-  poolCache[themeType] = nextPool;
-  setCache(cacheKey(themeType), nextPool, CACHE_TTL_MS);
-
-  return nextPool;
 }
 
-export async function getRandomChallenge(themeType: ThemeType) {
-  const pool = await getChallengePool(themeType);
+function selectChallengesForMode(challenges: Challenge[], hard: boolean) {
+  const pools = splitChallengesByDifficulty(challenges);
+  const preferredPool = getPoolForMode(hard, pools);
+
+  return uniqueBy(preferredPool, (challenge) => challenge.videoUrl);
+}
+
+export async function getModeChallengePool(themeType: ThemeType, hard: boolean) {
+  const key = modePoolKey(themeType, hard);
+  const existingModePool = modePoolCache[key] ?? [];
+
+  if (existingModePool.length >= POOL_MIN_SIZE) {
+    return existingModePool;
+  }
+
+  if (modePoolInFlight[key]) {
+    return modePoolInFlight[key] ?? [];
+  }
+
+  const request = (async () => {
+    let allPool = await getAllChallengePool(themeType);
+    let modePool = uniqueBy([...existingModePool, ...selectChallengesForMode(allPool, hard)], (challenge) => challenge.videoUrl);
+    let attempts = 0;
+
+    while (modePool.length < POOL_MIN_SIZE && attempts < 2) {
+      attempts += 1;
+      const freshPool = await fetchChallengePool(themeType);
+      const enrichedFreshPool = await enrichChallengePoolWithPopularity(freshPool);
+      allPool = uniqueBy([...allPool, ...enrichedFreshPool], (challenge) => challenge.videoUrl);
+      allPoolCache[themeType] = allPool;
+      setCache(cacheKey(themeType), allPool, CACHE_TTL_MS);
+      modePool = uniqueBy([...modePool, ...selectChallengesForMode(allPool, hard)], (challenge) => challenge.videoUrl);
+    }
+
+    if (modePool.length === 0) {
+      throw new Error("Não encontrei vídeos válidos para esse modo.");
+    }
+
+    modePoolCache[key] = modePool;
+
+    return modePool;
+  })();
+
+  modePoolInFlight[key] = request;
+
+  try {
+    return await request;
+  } finally {
+    delete modePoolInFlight[key];
+  }
+}
+
+export async function getRandomChallenge(themeType: ThemeType, hard = false) {
+  const key = modePoolKey(themeType, hard);
+  const pool = await getModeChallengePool(themeType, hard);
   const index = randomInt(0, pool.length - 1);
   const [challenge] = pool.splice(index, 1);
 
-  poolCache[themeType] = pool;
+  modePoolCache[key] = pool;
 
   if (!challenge) {
     throw new Error("Não foi possível sortear um desafio.");
@@ -339,9 +431,12 @@ export async function getRandomChallenge(themeType: ThemeType) {
 }
 
 export function getChallengeNames(themeType: ThemeType, extraChallenges: Challenge[] = []) {
-  const pool = poolCache[themeType] ?? getCache<Challenge[]>(cacheKey(themeType)) ?? [];
+  const allPool = allPoolCache[themeType] ?? getCache<Challenge[]>(cacheKey(themeType)) ?? [];
+  const modePools = Object.entries(modePoolCache)
+    .filter(([key]) => key.startsWith(`${themeType}:`))
+    .flatMap(([, pool]) => pool ?? []);
 
-  return uniqueBy([...extraChallenges, ...pool], (challenge) => challenge.animeName)
+  return uniqueBy([...extraChallenges, ...allPool, ...modePools], (challenge) => challenge.animeName)
     .flatMap((challenge) => [challenge.animeName, ...challenge.alternativeNames])
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b));

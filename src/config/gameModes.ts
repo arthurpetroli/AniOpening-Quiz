@@ -1,5 +1,14 @@
 import type { GameMode, GameModeId } from "../types/game";
 
+const standardRevealSteps = [
+  { time: 1, blur: 30 },
+  { time: 3, blur: 22 },
+  { time: 5, blur: 15 },
+  { time: 8, blur: 8 },
+  { time: 12, blur: 3 },
+  { time: 20, blur: 1 },
+];
+
 export const gameModes = {
   opening: {
     id: "opening",
@@ -7,14 +16,7 @@ export const gameModes = {
     path: "/opening",
     themeType: "OP",
     lives: 6,
-    revealSteps: [
-      { time: 1, blur: 30 },
-      { time: 3, blur: 22 },
-      { time: 5, blur: 15 },
-      { time: 8, blur: 8 },
-      { time: 12, blur: 3 },
-      { time: 20, blur: 1 },
-    ],
+    revealSteps: standardRevealSteps,
     hard: false,
   },
   ending: {
@@ -23,14 +25,7 @@ export const gameModes = {
     path: "/ending",
     themeType: "ED",
     lives: 6,
-    revealSteps: [
-      { time: 1, blur: 30 },
-      { time: 3, blur: 22 },
-      { time: 5, blur: 15 },
-      { time: 8, blur: 8 },
-      { time: 12, blur: 3 },
-      { time: 20, blur: 1 },
-    ],
+    revealSteps: standardRevealSteps,
     hard: false,
   },
   hardOpening: {
@@ -38,14 +33,8 @@ export const gameModes = {
     label: "Hard Opening",
     path: "/hard-opening",
     themeType: "OP",
-    lives: 5,
-    revealSteps: [
-      { time: 0.75, blur: 45 },
-      { time: 1.5, blur: 35 },
-      { time: 3, blur: 25 },
-      { time: 5, blur: 12 },
-      { time: 8, blur: 4 },
-    ],
+    lives: 6,
+    revealSteps: standardRevealSteps,
     hard: true,
   },
   hardEnding: {
@@ -53,14 +42,8 @@ export const gameModes = {
     label: "Hard Ending",
     path: "/hard-ending",
     themeType: "ED",
-    lives: 5,
-    revealSteps: [
-      { time: 0.75, blur: 45 },
-      { time: 1.5, blur: 35 },
-      { time: 3, blur: 25 },
-      { time: 5, blur: 12 },
-      { time: 8, blur: 4 },
-    ],
+    lives: 6,
+    revealSteps: standardRevealSteps,
     hard: true,
   },
 } satisfies Record<GameModeId, GameMode>;

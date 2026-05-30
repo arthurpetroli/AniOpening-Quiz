@@ -6,8 +6,8 @@ import type { GameModeId } from "../types/game";
 const descriptions: Record<GameModeId, string> = {
   opening: "Clipes de opening com 6 vidas, dicas durante a partida e blur progressivo mais gentil.",
   ending: "O mesmo fluxo do modo normal, mas usando endings da AnimeThemes API.",
-  hardOpening: "Openings com 5 vidas, menos tempo liberado, blur mais agressivo e autocomplete restrito.",
-  hardEnding: "Endings no modo difícil, sem dicas de ano, temporada, artista ou sequência durante a partida.",
+  hardOpening: "Openings de animes menos conhecidos, com as mesmas vidas, tempo e blur do modo normal.",
+  hardEnding: "Endings de animes mais nichados, com a mesma progressão visual do modo normal.",
 };
 
 export default function Home() {
@@ -40,7 +40,7 @@ export default function Home() {
           <div className="rounded-lg border border-white/10 bg-[#101114]/90 p-5">
             <AudioLines className="text-amber-200" size={24} aria-hidden="true" />
             <h2 className="mt-4 text-lg font-bold text-white">OP / ED</h2>
-            <p className="mt-2 text-sm leading-6 text-zinc-400">Normal: 6 vidas. Hard: 5 vidas.</p>
+            <p className="mt-2 text-sm leading-6 text-zinc-400">Todos os modos: 6 vidas e a mesma progressão.</p>
           </div>
           <div className="rounded-lg border border-white/10 bg-[#101114]/90 p-5">
             <ShieldQuestion className="text-cyan-200" size={24} aria-hidden="true" />

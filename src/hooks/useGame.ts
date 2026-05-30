@@ -29,11 +29,11 @@ function createAttempt(type: Attempt["type"], value: string): Attempt {
 }
 
 async function drawPair(mode: GameMode, preferredCurrent?: Challenge | null) {
-  const current = preferredCurrent ?? (await getRandomChallenge(mode.themeType));
+  const current = preferredCurrent ?? (await getRandomChallenge(mode.themeType, mode.hard));
   let next: Challenge | null = null;
 
   try {
-    next = await getRandomChallenge(mode.themeType);
+    next = await getRandomChallenge(mode.themeType, mode.hard);
   } catch {
     next = null;
   }

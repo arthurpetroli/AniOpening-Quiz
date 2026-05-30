@@ -20,8 +20,16 @@ export type AnimeThemesAnime = {
   year?: number;
   season?: string;
   synonyms?: Array<string | { text?: string; name?: string }>;
+  resources?: AnimeThemesResource[];
   animethemes?: AnimeThemesTheme[];
   themes?: AnimeThemesTheme[];
+};
+
+export type AnimeThemesResource = {
+  id?: number;
+  external_id?: number | string | null;
+  link?: string | null;
+  site?: string | null;
 };
 
 export type AnimeThemesTheme = {
